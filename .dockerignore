@@ -1,0 +1,4 @@
+*
+!pyproject.toml
+!pharma_scope/
+!pharma_scope/*.py

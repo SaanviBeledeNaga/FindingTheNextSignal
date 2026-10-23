@@ -1,0 +1,247 @@
+from __future__ import annotations
+
+from datetime import date
+from decimal import Decimal, InvalidOperation
+import re
+from urllib.parse import urlparse
+
+from .ingest import norm
+from .store import digest
+
+SCALES = {"units": 1, "thousand": 1000, "lakh": 100000, "million": 1000000, "crore": 10000000, "billion": 1000000000,
+          "%": 1, "percent": 1, "days": 1, "ratio": 1}
+
+
+def anchored_identity(profile, company_input, sources):
+    """Short company labels are valid identity evidence when name/ticker also match."""
+    def canonical(value):
+        return re.sub(r"[^a-z0-9]", "", value.casefold())
+    name, symbol = profile["name"].strip(), profile["symbol"].strip()
+    all_text = " ".join(p for source in sources for p in source["pages"])
+    if len(canonical(name)) < 3 or canonical(name) not in canonical(all_text):
+        raise ValueError("Company name was not found in the collected source text.")
+    symbol_grounded = len(canonical(symbol)) >= 3 and canonical(symbol) in canonical(all_text)
+    input_tokens = re.findall(r"[a-z0-9]+", company_input.casefold())
+    identity_text = canonical(name + " " + symbol)
+    if not any(len(token) >= 3 and token in identity_text for token in input_tokens):
+        raise ValueError("Collected company identity does not match the requested name or symbol.")
+    anchors = []
+    for item in profile["identity_evidence"]:
+        quote = str(item["quote"]).strip()
+        if len(canonical(quote)) < 3:
+            continue
+        matched = any(source["url"] == item["url"] and any(norm(quote) in norm(page) for page in source["pages"]) for source in sources)
+        label = canonical(quote)
+        identifies_company = label in canonical(name) or canonical(name) in label or (symbol_grounded and (label in canonical(symbol) or canonical(symbol) in label))
+        if matched and identifies_company and (len(norm(quote)) >= 15 or symbol_grounded):
+            anchors.append(item)
+    if not anchors:
+        raise ValueError("Company identity quotes could not be matched to a source name and ticker.")
+    result = {**profile, "identity_evidence": anchors, "uncertainty": list(profile["uncertainty"])}
+    domain = profile["official_domain"].strip().lower().removeprefix("www.")
+    domain_supported = domain and any((urlparse(source["url"]).hostname or "").removeprefix("www.") == domain or
+                                     any(domain in page.casefold() for page in source["pages"]) for source in sources)
+    if domain and not domain_supported:
+        result["official_domain"] = ""
+        result["uncertainty"].append("Official domain was not found in collected evidence; inferred domain omitted.")
+    return result
+
+
+def date_in_quote(value, quote):
+    parsed = date.fromisoformat(value)
+    normalized = " " + norm(re.sub(r"[,./-]", " ", quote)) + " "
+    variants = [value.replace("-", " "), f"{parsed.day} {parsed.month} {parsed.year}",
+                f"{parsed.day:02d} {parsed.month:02d} {parsed.year}"]
+    for month in [parsed.strftime("%B"), parsed.strftime("%b")]:
+        variants.extend([f"{parsed.day} {month} {parsed.year}", f"{parsed.day:02d} {month} {parsed.year}",
+                         f"{month} {parsed.day} {parsed.year}", f"{month} {parsed.day:02d} {parsed.year}"])
+    return any(" " + norm(v) + " " in normalized for v in variants)
+
+
+def extract_facts(source, rows):
+    accepted, errors = [], []
+    for row in rows:
+        try:
+            page = row["page"]
+            if not 1 <= page <= len(source["pages"]):
+                raise ValueError("page outside source")
+            quote = row["quote"]
+            if len(norm(quote)) < 15 or norm(quote) not in norm(source["pages"][page - 1]):
+                raise ValueError("quote not found on cited page")
+            if row["event_date"]:
+                date.fromisoformat(row["event_date"])
+                if not date_in_quote(row["event_date"], quote):
+                    raise ValueError("full event date not supported by quote")
+            if row["value"]:
+                value = Decimal(row["value"])
+                if not value.is_finite():
+                    raise ValueError("nonfinite value")
+                tokens = re.findall(r"(?<![\w.])-?\d[\d,]*(?:\.\d+)?", quote)
+                if value not in [Decimal(t.replace(",", "")) for t in tokens]:
+                    raise ValueError("numeric value not in quote")
+                if row["unit"] not in SCALES:
+                    raise ValueError("unknown unit")
+                if not row["metric"] or not row["fiscal_period"] or not row["basis"] or not row["definition"]:
+                    raise ValueError("numeric fact lacks reporting context")
+                period_year = re.search(r"(?:19|20)\d{2}", row["fiscal_period"])
+                if not period_year or period_year[0] not in quote:
+                    raise ValueError("fiscal period year not in evidence quote")
+            fid = "fact-" + digest((source["id"] + str(page) + norm(quote) + row["metric"] + row["value"]).encode())[:12]
+            accepted.append({**row, "id": fid, "source_id": source["id"]})
+        except (ValueError, InvalidOperation) as exc:
+            errors.append(str(exc))
+    return accepted, errors
+
+
+def calculation(spec, facts):
+    refs = spec["inputs"]
+    if len(refs) != 2 or any(fid not in facts for fid in refs):
+        raise ValueError("Calculations require two known numeric fact IDs.")
+    a, b = [facts[fid] for fid in refs]
+    if a.get("entity") != b.get("entity"):
+        raise ValueError("Calculation inputs refer to different entities.")
+    if not a["value"] or not b["value"]:
+        raise ValueError("Calculation input is not numeric.")
+    for field in ["currency", "basis", "definition", "unit"]:
+        if field == "unit":
+            if a[field] not in SCALES or b[field] not in SCALES:
+                raise ValueError("Unknown units.")
+            # Different monetary scales are allowed; unlike dimensions are not.
+            monetary = {"units", "thousand", "lakh", "million", "crore", "billion"}
+            if a[field] != b[field] and not {a[field], b[field]} <= monetary:
+                raise ValueError("Incompatible unit dimensions.")
+        elif a[field] != b[field]:
+            raise ValueError(f"Calculation has incompatible {field}.")
+    x, y = Decimal(a["value"]) * SCALES[a["unit"]], Decimal(b["value"]) * SCALES[b["unit"]]
+    op = spec["operation"]
+    if op in {"share", "margin_pct"}:
+        if a["fiscal_period"] != b["fiscal_period"]:
+            raise ValueError("Share or margin inputs must use the same fiscal period.")
+        if y == 0:
+            raise ValueError("Zero denominator.")
+        result, formula, unit = x / y * 100, "first / second * 100", "%"
+    elif op == "difference":
+        if a["metric"] != b["metric"]:
+            raise ValueError("Difference inputs must describe the same metric.")
+        result, formula, unit = y - x, "second - first", "base units" if a["unit"] in {"crore", "million", "billion", "lakh", "thousand"} else a["unit"]
+    else:
+        if a["metric"] != b["metric"] or a["fiscal_period"] == b["fiscal_period"]:
+            raise ValueError("Growth inputs require the same metric and distinct periods.")
+        if x <= 0:
+            raise ValueError("Growth requires a positive starting value.")
+        def period_key(value):
+            match = re.fullmatch(r"(?:FY)?(\d{4})(?:[- ]?Q([1-4]))?", value, re.I)
+            if not match:
+                raise ValueError("Growth periods must use YYYY, FYyyyy or FYyyyy-Qn.")
+            return int(match[1]), int(match[2]) if match[2] else 0
+        start, end = period_key(a["fiscal_period"]), period_key(b["fiscal_period"])
+        if start >= end or bool(start[1]) != bool(end[1]):
+            raise ValueError("Growth periods must progress forward and have comparable annual/quarterly durations.")
+        if op == "growth_pct":
+            result, formula, unit = (y / x - 1) * 100, "(second / first - 1) * 100", "%"
+        elif op == "cagr_pct":
+            if spec["years"] <= 0 or y < 0:
+                raise ValueError("CAGR needs a positive year interval and nonnegative end value.")
+            if start[1] or end[1] or spec["years"] != end[0] - start[0]:
+                raise ValueError("CAGR year interval does not match the annual fiscal periods.")
+            result = ((y / x) ** (Decimal(1) / Decimal(spec["years"])) - 1) * 100
+            formula, unit = "((second / first) ** (1 / years) - 1) * 100", "%"
+        else:
+            raise ValueError("Unknown operation.")
+    return {**spec, "result": str(round(result, 6)), "unit": unit, "formula": formula,
+            "input_values": [str(x), str(y)], "input_periods": [a["fiscal_period"], b["fiscal_period"]]}
+
+
+def origin(source, profile):
+    host = (urlparse(source["url"]).hostname or source["publisher"]).lower().removeprefix("www.")
+    official = profile.get("official_domain", "").lower().removeprefix("www.")
+    kind = source.get("source_kind", "other")
+    group = norm(source.get("origin_group", ""))
+    # Exchange filings and issuer material share the issuer origin.
+    if kind == "issuer" or (official and (host == official or host.endswith("." + official))):
+        return "issuer:" + profile["name"].casefold()
+    if kind == "regulator" and (host.endswith("fda.gov") or host.endswith(".gov.in") or host.endswith(".gov")):
+        return "regulator:" + host
+    # Unverified media/industry origin labels never establish independence automatically.
+    return "unverified:" + (group or host)
+
+
+def validate_finding(draft, review, hypothesis, facts, sources, calculations, profile):
+    valid_ids = set(facts)
+    supporting = list(dict.fromkeys(draft["supporting_facts"]))
+    opposing = list(dict.fromkeys(draft["opposing_facts"]))
+    cited = supporting + opposing + draft["discovery"]["evidence"] + draft["counterargument"]["evidence"]
+    cited += [fid for bullet in draft["why_it_matters"] for fid in bullet["evidence"]]
+    cited += [fid for entry in draft["timeline"] for fid in entry["evidence"]]
+    if any(fid not in valid_ids for fid in cited):
+        raise ValueError("Finding cites unknown facts.")
+    if not supporting or not draft["discovery"]["evidence"]:
+        raise ValueError("Finding lacks supporting citations.")
+    if not 3 <= len(draft["why_it_matters"]) <= 5:
+        raise ValueError("Finding requires three to five significance bullets.")
+    for claim in [draft["discovery"], draft["counterargument"], *draft["why_it_matters"]]:
+        if not claim["evidence"]:
+            raise ValueError("Each claim needs source citations; present unsupported alternatives as limitations.")
+        if any(cid not in calculations for cid in claim["calculations"]):
+            raise ValueError("Claim cites an unknown calculation.")
+        tokens = lambda text: [Decimal(t.replace(",", "")) for t in re.findall(r"(?<![\w.])-?\d[\d,]*(?:\.\d+)?", text)]
+        grounded = [number for fid in claim["evidence"] for number in tokens(facts[fid]["quote"])]
+        grounded += [Decimal(calculations[cid]["result"]) for cid in claim["calculations"]]
+        for number in tokens(claim["text"]):
+            # Permit displayed rounding, but not a number merely accompanied by an unrelated citation.
+            places = max(0, -number.as_tuple().exponent)
+            tolerance = Decimal(5) * (Decimal(10) ** (-places - 1))
+            if not any(abs(abs(number) - abs(value)) <= tolerance for value in grounded):
+                raise ValueError("Claim contains an ungrounded number.")
+    for entry in draft["timeline"]:
+        date.fromisoformat(entry["date"])
+        if not entry["evidence"]:
+            raise ValueError("Timeline event lacks evidence.")
+        if not any(facts[fid]["event_date"] == entry["date"] for fid in entry["evidence"]):
+            raise ValueError("Timeline date is not supported by a dated cited fact.")
+    source_ids = {facts[fid]["source_id"] for fid in supporting}
+    source_hashes = {sources[sid]["sha256"] for sid in source_ids}
+    groups = {origin(sources[sid], profile) for sid in source_ids}
+    verified = {g for g in groups if not g.startswith("unverified:")}
+    independent = len(verified) >= 2 and len(source_hashes) >= 2
+    problems = list(draft["limitations"])
+    if not independent:
+        problems.append("Independent corroboration is not established: publisher/domain count alone does not establish independent origin.")
+    unresolved_tests = [t for t in review["alternative_tests"] if t["outcome"] != "ruled_out"]
+    if unresolved_tests:
+        problems.append("Alternative explanations remain: " + "; ".join(t["explanation"] for t in unresolved_tests))
+    chronology = review["cause_precedes_effect"] and len(review["chronology_evidence"]) >= 2
+    if review["causal_claim"]:
+        dated = [facts[fid]["event_date"] for fid in review["chronology_evidence"] if fid in facts and facts[fid]["event_date"]]
+        chronology = chronology and len(dated) >= 2 and dated[0] < dated[1]
+        if not chronology:
+            problems.append("Causal chronology is not established by distinct dated evidence.")
+    status = "rejected" if review["verdict"] == "rejected" else draft["conclusion"]
+    used_calcs = {cid for claim in [draft["discovery"], draft["counterargument"], *draft["why_it_matters"]] for cid in claim["calculations"]}
+    if not used_calcs and status == "supported":
+        status = "unresolved"
+        problems.append("No validated financial calculation establishes materiality.")
+    if review["verdict"] == "unresolved" or not independent or (review["causal_claim"] and (not chronology or unresolved_tests)):
+        if status != "rejected":
+            status = "unresolved"
+    if review["causal_claim"] and len(review["alternative_tests"]) < 2 and status == "supported":
+        status = "unresolved"
+        problems.append("Causal interpretation lacks at least two evidenced alternative-explanation tests.")
+    strength = "Weak"
+    if independent and status != "rejected":
+        strength = "Moderate"
+        if status == "supported" and not opposing and not unresolved_tests and (not review["causal_claim"] or chronology):
+            strength = "Strong"
+    rationale = (f"{len(source_ids)} cited source(s), {len(source_hashes)} distinct archived content hash(es), "
+                 f"{len(verified)} conservatively verified origin group(s); "
+                 f"{len(opposing)} opposing fact(s); {len(unresolved_tests)} unresolved/supported alternative(s). "
+                 "Quotes and numbers are mechanically anchored; semantic support remains model-assessed.")
+    return {"id": hypothesis["id"], "title": draft["discovery"]["text"], "claim": draft["discovery"]["text"],
+            "status": status, "strength": strength, "strength_reason": rationale,
+            "hypothesis": hypothesis["hypothesis"], "angle": hypothesis["angle"],
+            "why_it_matters": draft["why_it_matters"], "discovery_evidence": draft["discovery"]["evidence"],
+            "evidence": supporting, "opposing_evidence": opposing, "timeline": draft["timeline"],
+            "calculations": [calculations[cid] for cid in sorted(used_calcs)],
+            "counterarguments": [draft["counterargument"]["text"]], "counterargument_evidence": draft["counterargument"]["evidence"],
+            "falsification": review["falsification_condition"], "next_steps": [t["explanation"] for t in unresolved_tests],
+            "limitations": list(dict.fromkeys(problems)), "skeptic": review}
