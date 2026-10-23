@@ -2,7 +2,20 @@
 
 An autonomous public-source research agent plus a terminal workbench. Version 0.2 adds a LangGraph investigation workflow, Gemini/OpenAI model adapters, Brave/Tavily search, supporting and opposing research, bounded retries through saved checkpoints, and a professional evidence report. The original offline geographic analysis remains available.
 
-Version 0.2.1 includes an installable wheel and container deployment configuration. See [DEPLOYMENT.md](DEPLOYMENT.md) for installation, persistent data, updates and rollback. No remote hosting destination is configured by the source release.
+Version 0.3.0 improves primary-document retrieval, separately cited financial table context, hypothesis admission and claim review. See [DEPLOYMENT.md](DEPLOYMENT.md) for installation, Codespaces, persistent data, updates and rollback.
+
+## Research quality changes in 0.3
+
+- Follow two bounded levels of official financial indexes, including directly linked CDN PDFs. Prioritize annual statements and results over call invitations. Source links are retrieval leads, not automatic independent corroboration.
+- Numeric rows can cite separate verbatim column headers, units and reporting basis. These passages are checked against their own physical pages and displayed in the report. Original unit case is normalized. Actual income-statement pages receive reserved selection slots.
+- Repair partially invalid extraction while retaining valid facts. Attempt one bounded financial-evidence recovery when fewer than two numeric financial facts are available.
+- Require two numeric financial facts and a valid calculation on the hypothesis's supporting evidence. Scheduling-only documents cannot produce a hypothesis. A discovery must cite a calculation.
+- Run a separate model review of claim support, column interpretation and sector relevance before publication. This is an additional fallible model check, not a proof of semantic correctness.
+- Require a structured falsification metric, numerical threshold, expected public source and observation window after the investigation date. Thresholds are explicitly proposed tests, not source-derived facts.
+
+Start a **new** investigation after updating to exercise the full pipeline; resuming a completed old run does not reevaluate its findings. Existing archived reports remain readable. An actual Sun Pharma FY2025 financial PDF extraction check retained numeric facts and supported comparable Python calculations. This is evidence of extraction progress, not a proven non-obvious discovery or finals readiness.
+
+A subsequent live autonomous Sun Pharma run collected 13 sources and retained 40 facts. A separate claim review withheld its draft discovery because the R&D-versus-revenue growth interpretation contradicted the cited figures. The run ended with `insufficient_evidence`, not a supported discovery. Intermittent Gemini 503 responses required retries. Budget reservations for opposing sources and final reasoning were strengthened after this evaluation. No claim of successful independent corroboration or non-obvious discovery is made from that run. Legacy Windows console output was also corrected so a rupee symbol cannot turn successful report export into a terminal encoding error.
 
 ## Live research setup
 

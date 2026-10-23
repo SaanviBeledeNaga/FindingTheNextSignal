@@ -38,7 +38,7 @@ class FakeWeb:
 
 def fact(quote, **kwargs):
     return {"kind": "business", "statement": quote, "page": 1, "quote": quote, "event_date": "", "fiscal_period": "",
-            "metric": "", "value": "", "currency": "", "unit": "", "basis": "", "definition": "", "entity": "Example Pharma", **kwargs}
+            "metric": "", "value": "", "currency": "", "unit": "", "basis": "", "definition": "", "entity": "Example Pharma", "context_evidence": [], **kwargs}
 
 
 class FakeModel:
@@ -55,6 +55,9 @@ class FakeModel:
         if schema == schemas.PLAN:
             return {"angles": [{"angle": "regulatory", "question": "Does the event explain revenue?", "significance": "Revenue exposure",
                                 "queries": ["Example Pharma revenue regulatory filing"]}], "identity_notes": []}
+        if schema == schemas.CLAIM_AUDIT:
+            return {"reviews": [{"hypothesis_id": d["hypothesis_id"], "all_claims_supported": True, "track_relevant": True,
+                                  "unsupported_claims": [], "reasoning": "Fixture review only, not a live semantic evaluation."} for d in data["drafts"]]}
         if schema == schemas.FACTS:
             if "fda.gov" in data["url"]:
                 rows = [fact(REGULATOR.splitlines()[0], kind="regulatory", event_date="2023-01-15")]
@@ -81,10 +84,14 @@ class FakeModel:
             if self.fail_skeptic_once:
                 self.fail_skeptic_once = False
                 raise ValueError("Simulated interruption")
+            from datetime import date, timedelta
+            start = date.fromisoformat(data['as_of']) + timedelta(days=1)
             return {"reviews": [{"hypothesis_id": "hypothesis-1", "verdict": "unresolved", "strongest_counterargument": "FX is not disclosed.",
                 "supporting_facts": support, "opposing_facts": [fx["id"]], "alternative_tests": [{"explanation": "Currency translation",
                 "outcome": "unresolved", "evidence": [fx["id"]]}], "cause_precedes_effect": False, "chronology_evidence": [], "causal_claim": True,
                 "falsification_condition": "Over the next two reported quarters, constant-currency US revenue recovers while remediation remains unchanged.",
+                "future_test": {"metric": "constant-currency US revenue growth (%)", "comparison": "above", "threshold": "0",
+                                "window_start": start.isoformat(), "window_end": (start + timedelta(days=180)).isoformat(), "source": "Future quarterly issuer results"},
                 "followup_queries": ["Example Pharma opposing evidence acquisition FX"], "reasoning": "Timing and a currency-adjusted effect are not established."}]}
         if schema == schemas.FINDINGS:
             def claim(text, refs, calcs=None):
@@ -137,7 +144,7 @@ def test_resume_keeps_sources_and_completed_work(store):
     run = ResearchAgent(store, model, FakeWeb(), Limits(seconds=120)).run(resume=state_id)
     assert run["id"] == state_id
     assert len(store.sources("EXAMPLE")) == 2
-    assert len(model.calls) - calls_before <= 3
+    assert len(model.calls) - calls_before <= 4
 
 
 def test_budget_is_enforced_and_saved(store):

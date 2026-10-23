@@ -29,6 +29,13 @@ def html(run, challenges=()):
     body += 'Quotes and financial calculations are mechanically checked. Interpretation, source classification and causal relevance require judgment.</p>'
     usage = run.get("usage", {})
     body += f'<p>{len(sources)} sources · {len(facts)} anchored facts · {usage.get("searches", 0)} searches · {usage.get("model_calls", 0)} model calls</p></section>'
+    if not run["findings"]:
+        numeric = sum(bool(f.get("value")) and f.get("kind") == "financial" for f in facts.values())
+        body += '<section><h2>Why no discovery was published</h2>'
+        body += f'<p>{numeric} validated financial number(s) were available. A report needs comparable financial inputs, a relevant calculation and a claim that survives review.</p>'
+        body += '<p>Company identification, report directories and earnings schedules alone do not establish a financial finding.</p>'
+        body += '<h3>What to do next</h3><ol><li>Collect actual annual statements and quarterly results, including table headers and units.</li>'
+        body += '<li>Check comparable periods, reporting definitions and entity scope.</li><li>Obtain independent evidence and test competing explanations before publishing.</li></ol></section>'
     for index, f in enumerate(run["findings"], 1):
         body += f'<article><p class="eyebrow">Finding {index} · {e(f["angle"])}</p><h2>{e(f["title"])}</h2>'
         body += f'<p class="badge {e(f["status"])}">{e(f["status"])} · {e(f["strength"])} evidence</p>'
@@ -85,6 +92,17 @@ def html(run, challenges=()):
         body += f'<div class="fact" id="fact-{e(fid)}"><h3>{e(fid)} · {e(src["title"])}</h3><p>{e(src["publisher"])} · '
         body += f'Published: {e(src["published"] or "unknown")} · Retrieved: {e(src.get("retrieved_at", "local archive"))} · Page {e(fact["page"])}</p>'
         body += f'<p>{e(fact["statement"])}</p><blockquote>{e(fact["quote"])}</blockquote><p>{link}</p>'
+        if fact.get("context_evidence"):
+            body += '<h4>Table headers and reporting context</h4>'
+            for anchor in fact["context_evidence"]:
+                context_url = safe_url(src["url"])
+                if context_url and urlparse(context_url).path.lower().endswith('.pdf'):
+                    context_url = context_url.split('#')[0] + '#page=' + str(anchor['page'])
+                page_label = f'Physical page {anchor["page"]}'
+                if context_url:
+                    page_label = f'<a href="{e(context_url)}" rel="noreferrer">{page_label}</a>'
+                body += '<p>' + page_label + '</p><blockquote>' + e(anchor['quote']) + '</blockquote>'
+            body += '<p>Passages are separately anchored; column interpretation remains subject to review.</p>'
         body += f'<details><summary>Provenance</summary><p>Origin classification: {e(src.get("source_kind", "unclassified"))}; '
         body += f'{e(src.get("origin_group", "unknown"))} (model-assessed)</p><code>Archived text/file SHA-256: {e(src["sha256"])}</code>'
         body += f'<p>Original downloaded SHA-256: {e(src.get("original_sha256", src["sha256"]))}</p></details></div>'

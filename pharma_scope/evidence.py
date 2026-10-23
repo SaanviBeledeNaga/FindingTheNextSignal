@@ -62,12 +62,24 @@ def extract_facts(source, rows):
     accepted, errors = [], []
     for row in rows:
         try:
+            row = {**row, "unit": row["unit"].strip().casefold(), "basis": norm(row["basis"]),
+                   "currency": row["currency"].strip().upper()}
             page = row["page"]
             if not 1 <= page <= len(source["pages"]):
                 raise ValueError("page outside source")
             quote = row["quote"]
             if len(norm(quote)) < 15 or norm(quote) not in norm(source["pages"][page - 1]):
                 raise ValueError("quote not found on cited page")
+            context = row.get("context_evidence", [])
+            if len(context) > 8:
+                raise ValueError("too many table context passages")
+            for anchor in context:
+                cp, cq = anchor["page"], anchor["quote"]
+                if not 1 <= cp <= len(source["pages"]) or (abs(cp - page) > 1 and cp != 1):
+                    raise ValueError("table context must be on the same/adjacent page or document cover")
+                if len(norm(cq)) < 4 or norm(cq) not in norm(source["pages"][cp - 1]):
+                    raise ValueError("table context quote not found on cited page")
+            reporting_text = quote + " " + " ".join(a["quote"] for a in context)
             if row["event_date"]:
                 date.fromisoformat(row["event_date"])
                 if not date_in_quote(row["event_date"], quote):
@@ -84,9 +96,18 @@ def extract_facts(source, rows):
                 if not row["metric"] or not row["fiscal_period"] or not row["basis"] or not row["definition"]:
                     raise ValueError("numeric fact lacks reporting context")
                 period_year = re.search(r"(?:19|20)\d{2}", row["fiscal_period"])
-                if not period_year or period_year[0] not in quote:
+                year = period_year[0] if period_year else ""
+                short_fy = re.search(r"\bFY\s*['’]?" + re.escape(year[-2:]) + r"\b", reporting_text, re.I) if year else None
+                split_fy = re.search(r"\b" + str(int(year) - 1) + r"\s*[-–/]\s*" + year[-2:] + r"\b", reporting_text) if year else None
+                if not year or not (re.search(r"(?<!\d)" + year + r"(?!\d)", reporting_text) or short_fy or split_fy):
                     raise ValueError("fiscal period year not in evidence quote")
-            fid = "fact-" + digest((source["id"] + str(page) + norm(quote) + row["metric"] + row["value"]).encode())[:12]
+                money_units = {"units", "thousand", "lakh", "million", "crore", "billion"}
+                if row["unit"] in money_units and not row["currency"]:
+                    raise ValueError("monetary fact lacks currency")
+            identity = [source["id"], page, norm(quote), row["metric"], row["value"], row["fiscal_period"],
+                        row["entity"], row["basis"], row["definition"], context]
+            import json
+            fid = "fact-" + digest(json.dumps(identity, sort_keys=True).encode())[:12]
             accepted.append({**row, "id": fid, "source_id": source["id"]})
         except (ValueError, InvalidOperation) as exc:
             errors.append(str(exc))
@@ -110,7 +131,7 @@ def calculation(spec, facts):
             monetary = {"units", "thousand", "lakh", "million", "crore", "billion"}
             if a[field] != b[field] and not {a[field], b[field]} <= monetary:
                 raise ValueError("Incompatible unit dimensions.")
-        elif a[field] != b[field]:
+        elif norm(a[field]) != norm(b[field]):
             raise ValueError(f"Calculation has incompatible {field}.")
     x, y = Decimal(a["value"]) * SCALES[a["unit"]], Decimal(b["value"]) * SCALES[b["unit"]]
     op = spec["operation"]
@@ -166,7 +187,26 @@ def origin(source, profile):
     return "unverified:" + (group or host)
 
 
-def validate_finding(draft, review, hypothesis, facts, sources, calculations, profile):
+def validate_future_test(test, as_of):
+    if not test:
+        raise ValueError("Future falsification test needs a metric, threshold, source and observation window.")
+    start, end = date.fromisoformat(test["window_start"]), date.fromisoformat(test["window_end"])
+    if start <= date.fromisoformat(as_of) or end <= start:
+        raise ValueError("Falsification observation window must be in the future, after the investigation date.")
+    try:
+        threshold = Decimal(test["threshold"])
+        if not threshold.is_finite():
+            raise InvalidOperation
+    except InvalidOperation:
+        raise ValueError("Falsification threshold must be a finite number.") from None
+    if not test["metric"].strip() or not test["source"].strip() or test["comparison"] not in {"above", "below", "at_least", "at_most"}:
+        raise ValueError("Future falsification test lacks a measurable metric or expected source.")
+    return (f"Reconsider if {test['metric']} is {test['comparison'].replace('_', ' ')} {test['threshold']} "
+            f"during {start.isoformat()} to {end.isoformat()}, measured using {test['source']}. "
+            "This is a proposed future test, not observed evidence.")
+
+
+def validate_finding(draft, review, hypothesis, facts, sources, calculations, profile, as_of=None):
     valid_ids = set(facts)
     supporting = list(dict.fromkeys(draft["supporting_facts"]))
     opposing = list(dict.fromkeys(draft["opposing_facts"]))
@@ -185,7 +225,8 @@ def validate_finding(draft, review, hypothesis, facts, sources, calculations, pr
         if any(cid not in calculations for cid in claim["calculations"]):
             raise ValueError("Claim cites an unknown calculation.")
         tokens = lambda text: [Decimal(t.replace(",", "")) for t in re.findall(r"(?<![\w.])-?\d[\d,]*(?:\.\d+)?", text)]
-        grounded = [number for fid in claim["evidence"] for number in tokens(facts[fid]["quote"])]
+        grounded = [number for fid in claim["evidence"] for number in tokens(facts[fid]["quote"] + " " +
+                    " ".join(a["quote"] for a in facts[fid].get("context_evidence", [])))]
         grounded += [Decimal(calculations[cid]["result"]) for cid in claim["calculations"]]
         for number in tokens(claim["text"]):
             # Permit displayed rounding, but not a number merely accompanied by an unrelated citation.
@@ -194,11 +235,15 @@ def validate_finding(draft, review, hypothesis, facts, sources, calculations, pr
             if not any(abs(abs(number) - abs(value)) <= tolerance for value in grounded):
                 raise ValueError("Claim contains an ungrounded number.")
     for entry in draft["timeline"]:
-        date.fromisoformat(entry["date"])
         if not entry["evidence"]:
             raise ValueError("Timeline event lacks evidence.")
-        if not any(facts[fid]["event_date"] == entry["date"] for fid in entry["evidence"]):
-            raise ValueError("Timeline date is not supported by a dated cited fact.")
+        if re.fullmatch(r"FY\d{4}(?:-Q[1-4])?", entry["date"]):
+            if not any(facts[fid]["fiscal_period"].upper().removeprefix('FY') == entry["date"].removeprefix('FY') for fid in entry["evidence"]):
+                raise ValueError("Timeline fiscal period is not supported by a cited fact.")
+        else:
+            date.fromisoformat(entry["date"])
+            if not any(facts[fid]["event_date"] == entry["date"] for fid in entry["evidence"]):
+                raise ValueError("Timeline date is not supported by a dated cited fact.")
     source_ids = {facts[fid]["source_id"] for fid in supporting}
     source_hashes = {sources[sid]["sha256"] for sid in source_ids}
     groups = {origin(sources[sid], profile) for sid in source_ids}
@@ -218,6 +263,12 @@ def validate_finding(draft, review, hypothesis, facts, sources, calculations, pr
             problems.append("Causal chronology is not established by distinct dated evidence.")
     status = "rejected" if review["verdict"] == "rejected" else draft["conclusion"]
     used_calcs = {cid for claim in [draft["discovery"], draft["counterargument"], *draft["why_it_matters"]] for cid in claim["calculations"]}
+    if not draft["discovery"]["calculations"]:
+        raise ValueError("Discovery lacks a cited validated financial calculation; scheduling facts alone are insufficient.")
+    falsification = validate_future_test(review.get("future_test"), as_of or date.today().isoformat())
+    if not draft["timeline"] and status == "supported":
+        status = "unresolved"
+        problems.append("No source-grounded timeline establishes when the financial story developed.")
     if not used_calcs and status == "supported":
         status = "unresolved"
         problems.append("No validated financial calculation establishes materiality.")
@@ -243,5 +294,5 @@ def validate_finding(draft, review, hypothesis, facts, sources, calculations, pr
             "evidence": supporting, "opposing_evidence": opposing, "timeline": draft["timeline"],
             "calculations": [calculations[cid] for cid in sorted(used_calcs)],
             "counterarguments": [draft["counterargument"]["text"]], "counterargument_evidence": draft["counterargument"]["evidence"],
-            "falsification": review["falsification_condition"], "next_steps": [t["explanation"] for t in unresolved_tests],
+            "falsification": falsification, "future_test": review["future_test"], "next_steps": [t["explanation"] for t in unresolved_tests],
             "limitations": list(dict.fromkeys(problems)), "skeptic": review}

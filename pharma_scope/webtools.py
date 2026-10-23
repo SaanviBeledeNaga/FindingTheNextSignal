@@ -5,6 +5,7 @@ from datetime import date
 import ipaddress
 import json
 import os
+import re
 from pathlib import Path
 import socket
 from urllib.parse import urljoin, urlparse, urlunparse
@@ -14,6 +15,18 @@ import httpx
 
 from .ingest import ingest
 from .store import digest, now
+
+
+def disclosure_score(result):
+    """Prioritize substantive disclosures; a filename is a retrieval hint, never evidence."""
+    text = (result.get("title", "") + " " + result.get("url", "")).lower()
+    score = 5 if urlparse(result.get("url", "")).path.lower().endswith(".pdf") else 0
+    score += 8 * bool(re.search(r"annual|financial.result|financial.statement|investor.presentation|earnings.release|press.release", text))
+    score += 4 * bool(re.search(r"annual", text))
+    score += 3 * bool(re.search(r"revenue|segment|quarter|presentation|result|report", text))
+    score -= 18 * bool(re.search(r"intimation|invitation|call.schedule|earnings.call.notice|client.challenge", text))
+    years = [int(y) for y in re.findall(r"\b20\d{2}\b", text) if int(y) <= date.today().year]
+    return score, max(years, default=0)
 
 
 def public_url(url):
@@ -111,19 +124,41 @@ class WebTools:
             if host != domain and not host.endswith("." + domain):
                 continue
             soup = BeautifulSoup(original.read_bytes(), "html.parser")
-            for link in soup.find_all("a", href=True):
-                url = urljoin(source["url"], link["href"])
+            for link in soup.find_all(["a", "iframe", "object"]):
+                href = link.get("href") or link.get("src") or link.get("data") or link.get("data-url")
+                if not href:
+                    continue
+                url = urljoin(source["url"], href)
                 parts = urlparse(url)
                 target = (parts.hostname or "").removeprefix("www.")
-                if parts.scheme not in {"http", "https"} or (target != domain and not target.endswith("." + domain)):
+                if parts.scheme not in {"http", "https"}:
                     continue
                 label = link.get_text(" ", strip=True)
-                if not parts.path.lower().endswith(".pdf") or not any(word in (label + " " + parts.path).lower() for word in ["annual", "report", "result", "presentation"]):
+                is_pdf = parts.path.lower().endswith(".pdf")
+                same_domain = target == domain or target.endswith("." + domain)
+                text = (label + " " + parts.path).lower()
+                financial = bool(re.search(r"annual|financial|result|presentation|press.release|quarter", text))
+                parent_financial = bool(re.search(r"annual|financial|result|presentation", source.get("title", ""), re.I))
+                # External CDN PDFs are allowed only when linked by a fetched official page.
+                # Off-domain HTML navigation is not followed. Every download still validates public URLs.
+                if not ((is_pdf and (financial or parent_financial)) or (same_domain and financial)):
                     continue
                 if url not in seen:
                     seen.add(url)
-                    leads.append({"url": url, "title": label or "Official company disclosure", "snippet": "Linked from official report index"})
-        return leads
+                    leads.append({"url": url, "title": label or "Official company disclosure", "snippet": "Linked from official report index",
+                                  "linked_from": source["url"]})
+        return sorted(leads, key=disclosure_score, reverse=True)
+
+    def is_report_index(self, store, source):
+        """Avoid spending extraction calls on link directories with no financial discussion."""
+        path = Path(store.metadata(source['id']).get('original_archive', ''))
+        if path.suffix != '.html' or not path.is_file():
+            return False
+        soup = BeautifulSoup(path.read_bytes(), 'html.parser')
+        pdf_links = sum(urlparse(a.get('href', '')).path.lower().endswith('.pdf') for a in soup.find_all('a', href=True))
+        body = ' '.join(source['pages'])
+        figures = re.search(r"(?:revenue|profit|sales|margin)[^\n]{0,100}(?:million|crore|billion|\d\s*%)", body, re.I)
+        return pdf_links >= 3 and not figures
 
     def collect(self, store, company, result, timeout=25):
         downloaded = self.download(result["url"], timeout)
@@ -159,5 +194,6 @@ class WebTools:
         sid = ingest(store, path, company, title[:400], urlparse(url).hostname, published, url)
         previous = store.metadata(sid)
         store.metadata(sid, {**previous, "retrieved_at": now(), "original_sha256": raw_hash, "original_archive": str(original),
-                            "canonical_url": url, "publication_date_verified": bool(published), "search_lead": result.get("snippet", "")})
+                            "canonical_url": url, "publication_date_verified": bool(published), "search_lead": result.get("snippet", ""),
+                            "linked_from": result.get("linked_from", "")})
         return sid

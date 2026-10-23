@@ -1,6 +1,6 @@
 # Deploy PHARMA SCOPE
 
-Version 0.2.1 is a terminal application with exported HTML reports. It does not serve a browser application or expose a web endpoint. You can update the application after installation or container deployment. The research workflow is still a preview: current real-company trials produce unresolved hypotheses rather than supported discoveries.
+Version 0.3.0 is a terminal application with exported HTML reports. It does not serve a browser application or expose a web endpoint. You can update the application after installation or container deployment. The research workflow is still a preview: current real-company trials produce unresolved hypotheses rather than supported discoveries.
 
 ## Free remote sessions with GitHub Codespaces
 
@@ -43,7 +43,7 @@ References: [starting without payment details](https://docs.github.com/en/codesp
 The release wheel installs the application rather than relying on an editable source checkout. From the existing project directory, use the wheel in the adjacent releases folder:
 
 ```powershell
-python -m pip install --upgrade "../releases/pharma_scope-0.2.1-py3-none-any.whl[ai,search]"
+python -m pip install --upgrade "../releases/pharma_scope-0.3.0-py3-none-any.whl[ai,search]"
 pharma doctor
 pharma demo --tui
 ```
@@ -98,6 +98,6 @@ Before upgrades, stop research processes and back up the complete data directory
 docker compose run --rm -T --entrypoint tar agent -C /data -czf - . > research-backup.tar.gz
 ```
 
-Future versions that change the database format need a migration and compatibility review. Reinstalling older code does not reverse a database migration; restore a compatible backup when needed. This release adds deployment files and report improvements without changing the database schema.
+Future versions that change the database format need a migration and compatibility review. Reinstalling older code does not reverse a database migration; restore a compatible backup when needed. This release adds fields to newly stored research JSON without changing the SQL tables. Start a new investigation to use all quality checks; an old completed checkpoint does not reevaluate itself.
 
 Docker references: [named-volume persistence and image updates](https://docs.docker.com/compose/gettingstarted/), [runtime configuration](https://docs.docker.com/compose/how-tos/environment-variables/set-environment-variables/), [keeping secrets out of image builds](https://docs.docker.com/build/building/secrets/).

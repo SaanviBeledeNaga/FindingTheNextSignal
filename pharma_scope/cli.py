@@ -87,6 +87,14 @@ def parse_pages(value):
 
 
 def main(argv=None):
+    # Preserve successful investigations on legacy Windows console encodings.
+    # HTML/JSON files remain UTF-8; unsupported console symbols use escaped text.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, 'reconfigure'):
+            try:
+                stream.reconfigure(errors='backslashreplace')
+            except (OSError, ValueError):
+                pass
     from .config import load_env
     load_env()
     args = parser().parse_args(argv)
