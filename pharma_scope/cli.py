@@ -114,10 +114,16 @@ def main(argv=None):
             agent = ResearchAgent(store, model=Model(args.provider, args.model), limits=limits, emit=progress)
             try:
                 run = agent.run(args.company, years=args.years, resume=args.resume)
-            except Exception:
+            except (Exception, KeyboardInterrupt):
                 latest = store.db.execute("SELECT id FROM agent_states ORDER BY updated DESC LIMIT 1").fetchone()
                 if latest:
                     print(f"Checkpoint retained. Resume with: python -m pharma_scope investigate --resume {latest['id']}", file=sys.stderr)
+                    try:
+                        partial = args.output or store.root / 'exports' / (latest['id'] + '.html')
+                        export(store, store.run(latest['id']), partial, 'html')
+                        print(f'Partial report (investigation incomplete): {partial.resolve()}', file=sys.stderr)
+                    except (ValueError, OSError, KeyError):
+                        print('Partial report export unavailable; the checkpoint is retained.', file=sys.stderr)
                 raise
             destination = args.output or store.root / "exports" / (run["id"] + ".html")
             export(store, run, destination, "html")

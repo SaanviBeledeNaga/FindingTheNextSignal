@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
+import sys
 
 import httpx
 from jsonschema import validate
@@ -32,6 +34,36 @@ class Model:
         if not re.fullmatch(r"[A-Za-z0-9._:/-]+", self.model):
             raise ValueError("Invalid model identifier.")
         self.last_usage = {}
+
+    def generate_bounded(self, task, schema, data, timeout=90):
+        """Enforce a wall-clock deadline outside the HTTP client's inactivity timeouts."""
+        if timeout <= 0:
+            raise TransientModelError('Model call deadline exhausted before request.')
+        env = os.environ.copy()
+        env['PYTHONIOENCODING'] = 'utf-8'
+        env['GEMINI_API_KEY' if self.provider == 'gemini' else 'OPENAI_API_KEY'] = self.key
+        request = {'provider': self.provider, 'model': self.model, 'task': task, 'schema': schema, 'data': data, 'timeout': timeout}
+        try:
+            completed = subprocess.run([sys.executable, '-m', 'pharma_scope.model_worker'],
+                input=json.dumps(request), capture_output=True, text=True, encoding='utf-8', env=env,
+                timeout=timeout, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+        except subprocess.TimeoutExpired:
+            # subprocess.run kills and waits for the worker on timeout; no abandoned client thread.
+            raise TransientModelError(f'Model call exceeded its {timeout:g}-second wall-clock deadline; worker stopped.') from None
+        if completed.returncode:
+            raise ValueError('Model worker failed; no response accepted. Credentials and raw worker output omitted.')
+        try:
+            response = json.loads(completed.stdout)
+        except (ValueError, TypeError):
+            raise ValueError('Model worker returned an invalid response.') from None
+        if response.get('error'):
+            if response.get('transient'):
+                raise TransientModelError(response['error'], response.get('retry_after', 0))
+            raise ValueError(response['error'])
+        result = response['result']
+        validate(result, schema)
+        self.last_usage = response.get('usage', {})
+        return result
 
     def generate(self, task, schema, data, timeout=90):
         text = json.dumps(data, ensure_ascii=False)

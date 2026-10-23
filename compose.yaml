@@ -1,7 +1,7 @@
 name: pharma-scope
 services:
   agent:
-    image: pharma-scope:0.3.0
+    image: pharma-scope:0.3.1
     build: .
     env_file:
       - .env

@@ -2,7 +2,11 @@
 
 An autonomous public-source research agent plus a terminal workbench. Version 0.2 adds a LangGraph investigation workflow, Gemini/OpenAI model adapters, Brave/Tavily search, supporting and opposing research, bounded retries through saved checkpoints, and a professional evidence report. The original offline geographic analysis remains available.
 
-Version 0.3.0 improves primary-document retrieval, separately cited financial table context, hypothesis admission and claim review. See [DEPLOYMENT.md](DEPLOYMENT.md) for installation, Codespaces, persistent data, updates and rollback.
+Version 0.3.1 improves primary-document retrieval, separately cited financial table context, hypothesis admission and claim review, and enforces model-call deadlines in isolated workers. See [DEPLOYMENT.md](DEPLOYMENT.md) for installation, Codespaces, persistent data, updates and rollback.
+
+### Timeout correction in 0.3.1
+
+A local checkpoint recorded one repair step spanning roughly 27 minutes despite an HTTP timeout setting. The previous HTTP client timeout did not provide an independent wall-clock bound. Live model calls now run in one-request subprocesses with a parent deadline of at most 90 seconds, capped by the remaining research time. A timed-out worker is killed and waited for before bounded retries. Provider keys are inherited through the worker environment rather than command-line arguments or request JSON. A second model response cannot discard facts that already passed validation: those facts are checkpointed before repair begins. Failed/budget-exhausted investigations now automatically export a labelled partial HTML report instead of leaving the report path missing. These changes were regression-tested; they do not make an incomplete investigation a successful discovery.
 
 ## Research quality changes in 0.3
 

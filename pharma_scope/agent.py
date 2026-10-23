@@ -86,9 +86,11 @@ class ResearchAgent:
             return cached
         for attempt in range(3):
             self.reserve(state, "model_calls")
-            self.event(state, "model", f"Requesting {getattr(self.model, 'model', 'model')} for {stage} (attempt {attempt + 1}/3).")
+            timeout = min(90, self.remaining(state))
+            self.event(state, "model", f"Requesting {getattr(self.model, 'model', 'model')} for {stage} (attempt {attempt + 1}/3; deadline {timeout:.1f}s).")
             try:
-                result = self.model.generate(task, schema, data, timeout=max(1, min(90, self.remaining(state))))
+                generate = getattr(self.model, 'generate_bounded', self.model.generate)
+                result = generate(task, schema, data, timeout=timeout)
                 break
             except TransientModelError as exc:
                 delay = max(2 ** (attempt + 1), exc.retry_after)
@@ -292,6 +294,11 @@ class ResearchAgent:
                 schemas.FACTS, {"company": state["profile"], "source_id": source["id"], "url": source["url"],
                                 "title": source["title"], "pages": self.selected_pages(source)})
             facts, errors = extract_facts(source, result["facts"])
+            # Save validated facts before attempting a potentially failing repair request.
+            retained = [f for f in facts if not f['event_date'] or f['event_date'] <= state['as_of']]
+            state['facts'].extend(f for f in retained if f['id'] not in existing)
+            existing.update(f['id'] for f in retained)
+            self.store.checkpoint(state)
             if errors:
                 original_facts = facts
                 repair_data = {"company": state["profile"], "source_id": source["id"], "url": source["url"],
@@ -522,6 +529,8 @@ class ResearchAgent:
                     return {"payload": current}
                 except (Exception, KeyboardInterrupt) as exc:
                     current["status"] = "interrupted" if isinstance(exc, KeyboardInterrupt) else "budget_exhausted" if isinstance(exc, BudgetExceeded) else "failed"
+                    if isinstance(exc, (BudgetExceeded, TransientModelError)):
+                        current['warnings'].append(str(exc))
                     current["elapsed"] = self.base_elapsed + time.monotonic() - self.started
                     self.event(current, stage, f"Stopped at {stage}: {type(exc).__name__}. Evidence and checkpoint retained.")
                     self.store.checkpoint(current)
