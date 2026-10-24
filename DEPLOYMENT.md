@@ -1,6 +1,6 @@
 # Deploy PHARMA SCOPE
 
-Version 0.3.1 is a terminal application with exported HTML reports. It does not serve a browser application or expose a web endpoint. You can update the application after installation or container deployment. The research workflow is still a preview: current real-company trials produce unresolved hypotheses rather than supported discoveries.
+Version 0.4.0 is a terminal application with exported HTML reports. It does not serve a browser application or expose a web endpoint. You can update the application after installation or container deployment. The research workflow is still a preview: current real-company trials produce unresolved hypotheses rather than supported discoveries.
 
 ## Free remote sessions with GitHub Codespaces
 
@@ -43,7 +43,7 @@ References: [starting without payment details](https://docs.github.com/en/codesp
 The release wheel installs the application rather than relying on an editable source checkout. From the existing project directory, use the wheel in the adjacent releases folder:
 
 ```powershell
-python -m pip install --upgrade "../releases/pharma_scope-0.3.1-py3-none-any.whl[ai,search]"
+python -m pip install --upgrade "../releases/pharma_scope-0.4.0-py3-none-any.whl[ai,search]"
 pharma doctor
 pharma demo --tui
 ```

@@ -2,7 +2,19 @@
 
 An autonomous public-source research agent plus a terminal workbench. Version 0.2 adds a LangGraph investigation workflow, Gemini/OpenAI model adapters, Brave/Tavily search, supporting and opposing research, bounded retries through saved checkpoints, and a professional evidence report. The original offline geographic analysis remains available.
 
-Version 0.3.1 improves primary-document retrieval, separately cited financial table context, hypothesis admission and claim review, and enforces model-call deadlines in isolated workers. See [DEPLOYMENT.md](DEPLOYMENT.md) for installation, Codespaces, persistent data, updates and rollback.
+Version 0.4.0 adds a dark research terminal with status cards, three columns, financial charts, evidence review, source ledger and activity stream. Research improvements and bounded provider workers from 0.3 remain in place. See [DEPLOYMENT.md](DEPLOYMENT.md) for installation, Codespaces, persistent data, updates and rollback.
+
+## Research terminal
+
+```powershell
+python -m pharma_scope tui latest
+```
+
+Press Enter to dismiss the startup summary. Use a wide terminal (at least 115 columns and 38 rows) for the three-column view; smaller windows use a compact two-column layout. F1 opens the dashboard, F2 evidence, F3 the timeline, F4 a plain-language explanation of the pipeline and F5 a refresh. Existing E/T/C/X/?/B/L/Q shortcuts still work. The command bar searches the local evidence archive; it does not execute shell commands or start a live model investigation.
+
+The workbench reads saved checkpoints every two seconds. You can open it in a second terminal while an investigation runs in the first; opening the workbench does not repeat search/model requests. `investigate --tui` still opens the workbench after research returns. The selected run remains pinned even if another run is created. Charts show actual comparable reported figures, withhold conflicting figures, and remain empty when no series is validated. Evidence ratings are categories, not fabricated probabilities. Synthetic demo data remains prominently labelled.
+
+Retrieval uses the configured search adapter (DDGS DuckDuckGo/Bing, Brave or Tavily) plus bounded official-index links. Python/httpx downloads files, BeautifulSoup parses HTML and PyMuPDF extracts PDF text. The model plans, extracts and reviews; Python checks quotes, numeric inputs and calculations. LangGraph coordinates the stages; SQLite preserves evidence and progress. Search snippets are only leads, and a retrieved document is not automatically independent supporting evidence. This remains document-based research with incomplete coverage and fallible interpretation.
 
 ### Timeout correction in 0.3.1
 
