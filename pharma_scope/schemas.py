@@ -22,7 +22,8 @@ PLAN = obj(angles=arr(obj(angle=enum("geography", "business_model", "regulatory"
                            significance=S, queries=arr(S))), identity_notes=arr(S))
 FACT = obj(kind=enum("financial", "business", "regulatory", "industry", "management"), statement=S,
            page=I, quote=S, event_date=S, fiscal_period=S, metric=S, value=S, currency=S, unit=S,
-           basis=S, definition=S, entity=S, context_evidence=arr(obj(page=I, quote=S)))
+           basis=S, definition=S, entity=S, context_evidence=arr(obj(page=I, quote=S)),
+           column_header=obj(page=I, quote=S))
 FACTS = obj(facts=arr(FACT), publication_date=S, origin_group=S,
             source_kind=enum("issuer", "regulator", "competitor", "industry", "news", "other"),
             geography_observations=arr(obj(period=I, region=S, value=S, currency=S, unit=S, basis=S,

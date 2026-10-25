@@ -4,6 +4,9 @@ import csv
 import io
 import json
 import re
+import subprocess
+import sys
+import os
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -12,14 +15,23 @@ from urllib.parse import urlparse
 from .store import Store, digest, uid
 
 
-def read_pages(path: Path) -> list[str]:
+def read_pages(path: Path, fast=False) -> list[str]:
     if path.suffix.lower() == ".pdf":
         try:
             import pymupdf
         except ImportError as exc:
             raise ValueError("PDF support needs: python -m pip install -e .") from exc
         with pymupdf.open(path) as doc:
-            pages = [page.get_text(sort=True) for page in doc]
+            # Native block ordering avoids expensive whitespace reconstruction on
+            # every page of a long report. Physical pages and original words remain.
+            pages = [page.get_textpage().extractText(sort=True) if fast else page.get_text(sort=True) for page in doc]
+            if fast:
+                financial = re.compile(r'geograph|reportable.segment|business.segment|statement of (?:profit|operations)|revenue from operations', re.I)
+                statement = re.compile(r'(?im)^\s*(?:consolidated\s+|standalone\s+)?statement of (?:profit and loss|operations)\s*$')
+                ranked = sorted(range(len(pages)), key=lambda i:(bool(statement.search(pages[i][:1800])),len(financial.findall(pages[i]))), reverse=True)
+                for index in ranked[:8]:
+                    if financial.search(pages[index]):
+                        pages[index] = doc[index].get_text(sort=True)
         if not any(p.strip() for p in pages):
             raise ValueError("No PDF text found; OCR scanned reports before ingestion.")
         return pages
@@ -29,7 +41,7 @@ def read_pages(path: Path) -> list[str]:
 
 
 def ingest(store: Store, path: Path, company: str, title: str, publisher: str,
-           published: str, url: str = "", demo=False) -> str:
+           published: str, url: str = "", demo=False, parse_timeout=None) -> str:
     if not all(s.strip() for s in (company, title, publisher)):
         raise ValueError("Company, title and publisher must be nonempty.")
     if published:
@@ -42,17 +54,45 @@ def ingest(store: Store, path: Path, company: str, title: str, publisher: str,
     sha = digest(data)
     company = company.upper()
     existing = store.db.execute("SELECT id,demo FROM sources WHERE company=? AND sha256=?", (company, sha)).fetchone()
-    if existing:
+    parser_version = 'financial-layout-2'
+    refresh = bool(existing and path.suffix.lower()=='.pdf' and parse_timeout
+                   and store.metadata(existing['id']).get('text_parser') != parser_version)
+    if existing and not refresh:
         if bool(existing["demo"]) != bool(demo):
             raise ValueError("The same source cannot mix demo and real provenance.")
         return existing["id"]
-    pages = read_pages(path)
+    # A fresh download with identical bytes can reuse its already-parsed text.
+    parsed = store.db.execute('SELECT id,pages FROM sources WHERE sha256=? AND demo=? LIMIT 1', (sha,int(demo))).fetchone()
+    if parsed and parse_timeout and store.metadata(parsed['id']).get('text_parser') != parser_version:
+        parsed = None
+    if parsed and not refresh:
+        pages = json.loads(parsed['pages'])
+    elif parse_timeout and path.suffix.lower() == '.pdf':
+        try:
+            result = subprocess.run([sys.executable, '-m', 'pharma_scope.source_worker', str(path)],
+                capture_output=True, text=True, encoding='utf-8', timeout=parse_timeout,
+                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        except subprocess.TimeoutExpired:
+            raise ValueError('PDF parsing exceeded its bounded deadline; no facts were accepted from the incomplete document.') from None
+        if result.returncode:
+            raise ValueError('PDF could not be parsed; the original download remains archived.')
+        pages = json.loads(result.stdout)
+    else:
+        pages = read_pages(path)
     archive = store.archive / (sha + path.suffix.lower())
     archive.write_bytes(data)
+    if refresh:
+        source_id = existing['id']
+        store.db.execute('UPDATE sources SET pages=? WHERE id=?',(json.dumps(pages),source_id))
+        store.db.commit()
+        store.metadata(source_id,{**store.metadata(source_id),'text_parser':parser_version})
+        return source_id
     source_id = uid("src")
     store.db.execute("INSERT INTO sources VALUES (?,?,?,?,?,?,?,?,?,?)", (
         source_id, company, title, publisher, published, url, sha, str(archive), json.dumps(pages), int(demo)))
     store.db.commit()
+    if parse_timeout and path.suffix.lower()=='.pdf':
+        store.metadata(source_id,{**store.metadata(source_id),'text_parser':parser_version})
     return source_id
 
 

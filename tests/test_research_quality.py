@@ -62,8 +62,9 @@ def test_invented_table_context_is_rejected():
 
 def test_equal_table_values_in_different_periods_keep_distinct_ids():
     a, b = table_fact(), table_fact()
+    a['quote'] = b['quote'] = a['quote'].replace('480.0','525.0')
     b["fiscal_period"] = "FY2024"
-    rows, errors = extract_facts({"id": "s", "pages": [TABLE]}, [a, b])
+    rows, errors = extract_facts({"id": "s", "pages": [TABLE.replace('480.0','525.0')]}, [a, b])
     assert not errors and len({r["id"] for r in rows}) == 2
 
 

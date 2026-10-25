@@ -44,3 +44,17 @@ def test_explicit_domain_is_preserved():
     evidence = sources()
     evidence[0]["pages"][0] += "\nWebsite: https://example.test"
     assert anchored_identity(profile(), "EXAMPLE", evidence)["official_domain"] == "example.test"
+
+
+def test_typographic_apostrophe_matches_but_original_source_quote_is_retained():
+    value = profile()
+    value.update(name="Example's Laboratories Ltd.",symbol='EXAMPLE')
+    value['identity_evidence'] = [{'url':'https://disclosures.test/example',
+                                  'quote':"Example's Laboratories Ltd. develops medicines."}]
+    original = 'Example\u2019s Laboratories Ltd. develops medicines.'
+    evidence = [{'url':'https://disclosures.test/example','pages':[original+'\nTicker EXAMPLE']}]
+    result = anchored_identity(value,"Example's",evidence)
+    assert result['identity_evidence'][0]['quote'] == original
+    value['identity_evidence'][0]['quote'] = "Example's Laboratories Ltd. develops vaccines."
+    with pytest.raises(ValueError,match='quotes'):
+        anchored_identity(value,"Example's",evidence)

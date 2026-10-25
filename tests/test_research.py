@@ -175,35 +175,3 @@ def test_cli_json_and_failure_exit(tmp_path):
     assert "No observations" in bad.stderr
 
 
-def test_tui_navigation_challenge_and_export(store):
-    from pharma_scope.tui import Workbench
-    from textual.widgets import DataTable, Input, Static
-
-    run = seed_demo(store)
-
-    async def scenario():
-        app = Workbench(store.root, run["id"], show_summary=False)
-        async with app.run_test(size=(120, 40)) as pilot:
-            await pilot.pause()
-            assert app.query_one("#findings", DataTable).row_count == len(run["findings"])
-            await pilot.press("e")
-            await pilot.pause()
-            assert app.view == "evidence"
-            assert "SHA256" in str(app.query_one("#detail", Static).render())
-            await pilot.press("t")
-            assert app.view == "timeline"
-            await pilot.press("c")
-            field = app.query_one("#challenge", Input)
-            field.value = "Could currency explain this?"
-            await pilot.press("enter")
-            for _ in range(20):
-                await pilot.pause(0.02)
-                if app.last_challenge:
-                    break
-            assert app.last_challenge and app.last_challenge["matches"]
-            await pilot.press("x")
-            assert (store.root / "exports" / f"{run['id']}.html").exists()
-            await pilot.press("s")
-            assert app.view == "skeptic"
-
-    asyncio.run(scenario())

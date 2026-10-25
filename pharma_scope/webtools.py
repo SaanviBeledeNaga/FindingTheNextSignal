@@ -8,6 +8,7 @@ import os
 import re
 from pathlib import Path
 import socket
+import time
 from urllib.parse import urljoin, urlparse, urlunparse
 
 from bs4 import BeautifulSoup
@@ -15,6 +16,20 @@ import httpx
 
 from .ingest import ingest
 from .store import digest, now
+
+REPORT_DIRECTORIES = {'annualreports.com', 'companiesmarketcap.com'}
+NON_ISSUER_DOMAINS = REPORT_DIRECTORIES | {'scribd.com','trendlyne.com','moneycontrol.com','screener.in',
+    'financialfilings.com','marketscreener.com','nseindia.com','bseindia.com','sec.gov','fda.gov'}
+
+
+def host_is(host, domain):
+    return host == domain or host.endswith('.' + domain)
+
+
+def document_year(result):
+    text = result.get('title','') + ' ' + urlparse(result.get('url','')).path
+    years = [int(y) for y in re.findall(r'(?<!\d)20\d{2}(?!\d)', text)]
+    return max(years, default=0)
 
 
 def disclosure_score(result):
@@ -25,7 +40,7 @@ def disclosure_score(result):
     score += 4 * bool(re.search(r"annual", text))
     score += 3 * bool(re.search(r"revenue|segment|quarter|presentation|result|report", text))
     score -= 18 * bool(re.search(r"intimation|invitation|call.schedule|earnings.call.notice|client.challenge", text))
-    years = [int(y) for y in re.findall(r"\b20\d{2}\b", text) if int(y) <= date.today().year]
+    years = [int(y) for y in re.findall(r"(?<!\d)20\d{2}(?!\d)", text) if int(y) <= date.today().year]
     return score, max(years, default=0)
 
 
@@ -88,8 +103,9 @@ class WebTools:
         except httpx.HTTPError as exc:
             raise ValueError(f"Search network request failed ({type(exc).__name__}).") from None
 
-    def download(self, url, timeout=25, max_bytes=20000000):
+    def download(self, url, timeout=25, max_bytes=60000000):
         # Validate every redirect; never forward API credentials or cookies to evidence hosts.
+        started = time.monotonic()
         with httpx.Client(headers={"User-Agent": "PHARMA-SCOPE/0.2 public-financial-research"}, follow_redirects=False, timeout=timeout) as client:
             for _ in range(6):
                 url = public_url(url)
@@ -100,8 +116,13 @@ class WebTools:
                             continue
                         if response.status_code != 200:
                             raise ValueError(f"Source retrieval failed (HTTP {response.status_code}).")
+                        size = response.headers.get('content-length','')
+                        if size.isdigit() and int(size) > max_bytes:
+                            raise ValueError('Source exceeds the 60 MB full-document download limit.')
                         content = bytearray()
                         for chunk in response.iter_bytes():
+                            if time.monotonic() - started > timeout:
+                                raise ValueError('Source download exceeded its total time budget.')
                             content.extend(chunk)
                             if len(content) > max_bytes:
                                 raise ValueError("Source exceeds download size limit.")
@@ -110,10 +131,24 @@ class WebTools:
                     raise ValueError(f"Source network request failed ({type(exc).__name__}).") from None
         raise ValueError("Too many source redirects.")
 
+    def issuer_links(self, store, sources):
+        """Explicit website hyperlinks are discovery leads; a directory is never the issuer."""
+        leads = []
+        for source in sources:
+            path = Path(store.metadata(source['id']).get('original_archive',''))
+            if path.suffix != '.html' or not path.is_file():
+                continue
+            for a in BeautifulSoup(path.read_bytes(),'html.parser').find_all('a',href=True):
+                if not re.fullmatch(r'(?:visit\s+)?(?:official\s+|company\s+)?(?:web\s?site)(?:\s*[↗»])?',a.get_text(' ',strip=True),re.I):
+                    continue
+                url = urljoin(source['url'],a['href'])
+                host = (urlparse(url).hostname or '').lower().removeprefix('www.')
+                if urlparse(url).scheme in {'https','http'} and host and not any(host_is(host,d) for d in NON_ISSUER_DOMAINS):
+                    leads.append({'url':url,'title':'Issuer website linked by company directory','linked_from':source['url'],'snippet':'Website hyperlink; not independent evidence'})
+        return leads
+
     def report_links(self, store, sources, official_domain):
         domain = official_domain.lower().removeprefix("www.")
-        if not domain:
-            return []
         leads, seen = [], set()
         for source in sources:
             metadata = store.metadata(source["id"])
@@ -121,7 +156,9 @@ class WebTools:
             if original.suffix != ".html" or not original.is_file():
                 continue
             host = (urlparse(source["url"]).hostname or "").removeprefix("www.")
-            if host != domain and not host.endswith("." + domain):
+            directory = any(host_is(host,d) for d in REPORT_DIRECTORIES)
+            official = bool(domain and host_is(host,domain))
+            if not official and not directory:
                 continue
             soup = BeautifulSoup(original.read_bytes(), "html.parser")
             for link in soup.find_all(["a", "iframe", "object"]):
@@ -131,21 +168,31 @@ class WebTools:
                 url = urljoin(source["url"], href)
                 parts = urlparse(url)
                 target = (parts.hostname or "").removeprefix("www.")
+                if directory and parts.path.lower().endswith('.pdf') and parts.query == 'save':
+                    # Catalogs offer view/download links to the same file. One
+                    # request is sufficient; repeated copies add no corroboration.
+                    url = urlunparse(parts._replace(query='',fragment=''))
+                    parts = urlparse(url)
                 if parts.scheme not in {"http", "https"}:
                     continue
                 label = link.get_text(" ", strip=True)
                 is_pdf = parts.path.lower().endswith(".pdf")
-                same_domain = target == domain or target.endswith("." + domain)
+                same_domain = bool(domain and host_is(target,domain))
                 text = (label + " " + parts.path).lower()
                 financial = bool(re.search(r"annual|financial|result|presentation|press.release|quarter", text))
                 parent_financial = bool(re.search(r"annual|financial|result|presentation", source.get("title", ""), re.I))
                 # External CDN PDFs are allowed only when linked by a fetched official page.
                 # Off-domain HTML navigation is not followed. Every download still validates public URLs.
-                if not ((is_pdf and (financial or parent_financial)) or (same_domain and financial)):
+                if directory:
+                    # A company directory may link a full report copy, never unrelated HTML.
+                    allowed = is_pdf and (financial or parent_financial)
+                else:
+                    allowed = (is_pdf and (financial or parent_financial)) or (same_domain and financial)
+                if not allowed:
                     continue
                 if url not in seen:
                     seen.add(url)
-                    leads.append({"url": url, "title": label or "Official company disclosure", "snippet": "Linked from official report index",
+                    leads.append({"url": url, "title": label or "Linked company disclosure", "snippet": "Linked from company report directory" if directory else "Linked from issuer report index",
                                   "linked_from": source["url"]})
         return sorted(leads, key=disclosure_score, reverse=True)
 
@@ -162,6 +209,10 @@ class WebTools:
 
     def collect(self, store, company, result, timeout=25):
         downloaded = self.download(result["url"], timeout)
+        return self.collect_downloaded(store, company, result, downloaded)
+
+    def collect_downloaded(self, store, company, result, downloaded, parse_timeout=None):
+        """Commit one completed download on the owning SQLite thread."""
         raw, url = downloaded["data"], downloaded["url"]
         raw_hash = digest(raw)
         pdf = raw.startswith(b"%PDF")
@@ -191,7 +242,7 @@ class WebTools:
                 raise ValueError("Source has insufficient readable text (possibly requires JavaScript or is blocked).")
             path = store.archive / (raw_hash + ".txt")
             path.write_text(text, encoding="utf-8")
-        sid = ingest(store, path, company, title[:400], urlparse(url).hostname, published, url)
+        sid = ingest(store, path, company, title[:400], urlparse(url).hostname, published, url, parse_timeout=parse_timeout)
         previous = store.metadata(sid)
         store.metadata(sid, {**previous, "retrieved_at": now(), "original_sha256": raw_hash, "original_archive": str(original),
                             "canonical_url": url, "publication_date_verified": bool(published), "search_lead": result.get("snippet", ""),

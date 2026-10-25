@@ -2,3 +2,7 @@
 !pyproject.toml
 !pharma_scope/
 !pharma_scope/*.py
+!pharma_scope/web_assets/
+!pharma_scope/web_assets/*
+!pharma_scope/data/
+!pharma_scope/data/*.json

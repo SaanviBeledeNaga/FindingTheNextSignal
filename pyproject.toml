@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pharma-scope"
-version = "0.4.0"
-description = "Evidence-first pharmaceutical research in your terminal"
+version = "0.6.1"
+description = "Autonomous pharmaceutical financial research with an interactive web dashboard"
 requires-python = ">=3.11"
-dependencies = ["textual>=0.80,<9", "PyMuPDF>=1.24,<2", "httpx>=0.27,<1", "beautifulsoup4>=4.12,<5", "langgraph>=1,<2", "jsonschema>=4.23,<5"]
+dependencies = ["PyMuPDF>=1.24,<2", "httpx>=0.27,<1", "beautifulsoup4>=4.12,<5", "langgraph>=1,<2", "jsonschema>=4.23,<5"]
 
 [project.optional-dependencies]
 ai = ["openai>=1.60,<3"]
@@ -19,6 +19,9 @@ pharma = "pharma_scope.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["pharma_scope*"]
+
+[tool.setuptools.package-data]
+pharma_scope = ["web_assets/*.html", "web_assets/*.css", "web_assets/*.js", "web_assets/*.json", "data/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

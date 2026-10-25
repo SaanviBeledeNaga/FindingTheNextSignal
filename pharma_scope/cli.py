@@ -14,26 +14,27 @@ from .store import Store
 
 
 def parser():
-    p = argparse.ArgumentParser(prog="pharma", description="PHARMA-SCOPE | Evidence-first terminal research")
+    p = argparse.ArgumentParser(prog="pharma", description="PHARMA-SCOPE | Autonomous financial research")
     p.add_argument("--data-dir", default=".pharma", help="SQLite and archive folder (default: .pharma)")
     sub = p.add_subparsers(dest="command", required=True)
     sub.add_parser("doctor", help="Check setup without printing API keys")
+    eligibility=sub.add_parser('eligibility',help='Check a dated official NIFTY 50 snapshot and Track D industry')
+    eligibility.add_argument('company',nargs='?')
+    eligibility.add_argument('--refresh',action='store_true',help='Download and validate the official constituent CSV')
     research = sub.add_parser("investigate", help="Autonomously research a company using public sources")
     research.add_argument("company", nargs="?")
     research.add_argument("--resume", help="Resume a saved investigation ID")
     research.add_argument("--provider", choices=["gemini", "openai"])
     research.add_argument("--model")
     research.add_argument("--years", type=int, default=5)
-    research.add_argument("--seconds", type=int, default=600)
+    research.add_argument("--seconds", type=int, default=270)
     research.add_argument("--max-searches", type=int, default=16)
     research.add_argument("--max-sources", type=int, default=18)
     research.add_argument("--max-model-calls", type=int, default=30)
     research.add_argument("--rounds", type=int, default=2)
     research.add_argument("--json", action="store_true")
-    research.add_argument("--tui", action="store_true")
     research.add_argument("--output", type=Path)
     demo = sub.add_parser("demo", help="Seed fictional disclosures and investigate DEMO")
-    demo.add_argument("--tui", action="store_true", help="Open the terminal workbench after seeding")
     demo.add_argument("--json", action="store_true")
     ing = sub.add_parser("ingest", help="Archive a local PDF or text source")
     ing.add_argument("path", type=Path)
@@ -65,8 +66,9 @@ def parser():
     out.add_argument("run", nargs="?", default="latest")
     out.add_argument("--format", choices=["html", "json", "md"], default="html")
     out.add_argument("--output", type=Path)
-    tui = sub.add_parser("tui", help="Open the interactive terminal workbench")
-    tui.add_argument("run", nargs="?", default="latest")
+    web = sub.add_parser("web", help="Open the interactive browser research dashboard")
+    web.add_argument("--port", type=int, default=8765)
+    web.add_argument("--open", action="store_true", help="Open the dashboard in your default browser")
     return p
 
 
@@ -104,11 +106,21 @@ def main(argv=None):
         if args.command == "doctor":
             from .config import doctor
             print(json.dumps(doctor(), indent=2))
+        elif args.command == 'eligibility':
+            from .eligibility import check, refresh, SNAPSHOT
+            if args.refresh:
+                refresh()
+            if args.company:
+                print(json.dumps(check({'name':args.company}),indent=2))
+            else:
+                value=json.loads(SNAPSHOT.read_text(encoding='utf-8'))
+                print(json.dumps({k:value[k] for k in ['index','source_url','retrieved_at','effective_date']},indent=2))
         elif args.command == "investigate":
             from .agent import Limits, ResearchAgent
             from .providers import Model
             limits = Limits(seconds=args.seconds, searches=args.max_searches, sources=args.max_sources,
-                            model_calls=args.max_model_calls, rounds=args.rounds)
+                            model_calls=args.max_model_calls, rounds=args.rounds,
+                            fast_mode=args.seconds <= 300, pages_per_source=8 if args.seconds <= 300 else 10)
             def progress(entry):
                 print(f"[{entry['stage']}] {entry['message']}", file=sys.stderr)
             agent = ResearchAgent(store, model=Model(args.provider, args.model), limits=limits, emit=progress)
@@ -128,17 +140,11 @@ def main(argv=None):
             destination = args.output or store.root / "exports" / (run["id"] + ".html")
             export(store, run, destination, "html")
             print(json.dumps(run, indent=2) if args.json else markdown(run))
-            print(f"Report: {destination.resolve()}", file=sys.stderr)
-            if args.tui:
-                from .tui import launch
-                launch(store.root, run["id"])
+            label = 'Report' if run['status'] == 'completed' else 'Research incomplete; evidence record saved'
+            print(f"{label}: {destination.resolve()}", file=sys.stderr)
         elif args.command == "demo":
             run = seed_demo(store)
-            if args.tui:
-                from .tui import launch
-                launch(store.root, run["id"])
-            else:
-                print(json.dumps(run, indent=2) if args.json else markdown(run))
+            print(json.dumps(run, indent=2) if args.json else markdown(run))
         elif args.command == "ingest":
             sid = ingest(store, args.path, args.company, args.title, args.publisher, args.published, args.url)
             print(json.dumps({"source_id": sid, "status": "archived"}))
@@ -170,10 +176,14 @@ def main(argv=None):
             run = store.run(args.run)
             path = args.output or store.root / "exports" / f"{run['id']}.{args.format}"
             print(export(store, run, path, args.format))
-        elif args.command == "tui":
-            store.run(args.run)  # Friendly error before entering an alternate terminal screen.
-            from .tui import launch
-            launch(store.root, args.run)
+        elif args.command == "web":
+            if not 1 <= args.port <= 65535:
+                raise ValueError('Choose a port between 1 and 65535.')
+            from .web import serve
+            root = store.root
+            store.close()
+            store = None
+            serve(root, args.port, args.open)
         return 0
     except (ValueError, OSError, ImportError, ValidationError) as exc:
         print(f"pharma: {exc}", file=sys.stderr)

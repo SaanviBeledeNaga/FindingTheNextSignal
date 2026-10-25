@@ -1,0 +1,126 @@
+{
+  "reviewed_version": "0.5.0",
+  "overall": "Partial \u2014 workflow implemented; supported autonomous discovery on unseen companies remains unproven.",
+  "groups": [
+    {
+      "name": "Autonomous Research Workflow",
+      "items": [
+        {
+          "requirement": "Choose research angles and find public sources",
+          "status": "Implemented",
+          "detail": "The model resolves company identity and ranks geography, business-model and regulatory questions; search adapters and official report-link traversal collect public documents."
+        },
+        {
+          "requirement": "Connect filings, results, industry, competitors and news",
+          "status": "Partial",
+          "detail": "The evidence graph can link facts across documents. Competitor/industry coverage is inconsistent, and media/industry origins are conservatively unverified rather than automatically treated as independent."
+        },
+        {
+          "requirement": "Calculate meaningful financial relationships",
+          "status": "Implemented",
+          "detail": "Python Decimal calculates shares, margins, changes, growth and CAGR using cited inputs with compatible entities, units, definitions and periods. Common metrics such as receivable days are not yet available as dedicated multi-input operations."
+        },
+        {
+          "requirement": "Form and test hypotheses",
+          "status": "Implemented",
+          "detail": "Financial hypotheses require numeric evidence and validated calculations. The graph performs follow-up collection, skeptic review, bounded repairs and a separate claim-support audit."
+        },
+        {
+          "requirement": "Actively challenge interpretations",
+          "status": "Partial",
+          "detail": "The skeptic requests opposing evidence and tests alternatives. Source budgets, blocked pages and account-free search failures can leave tests unresolved. No exhaustive contradiction search is guaranteed."
+        },
+        {
+          "requirement": "Audit every major conclusion",
+          "status": "Partial",
+          "detail": "Findings link to exact passages, physical pages, required column-header context, calculations and original hashes. Invalid header/value assignments are rejected. Semantic and visual interpretation remain fallible."
+        }
+      ]
+    },
+    {
+      "name": "Eight Required Output Elements",
+      "items": [
+        {
+          "requirement": "One-sentence non-obvious discovery",
+          "status": "Unproven",
+          "detail": "The schema and renderer provide a one-sentence finding. The live trials have not established a supported, clearly non-obvious discovery; novelty is not independently measured."
+        },
+        {
+          "requirement": "Three to five significance bullets",
+          "status": "Implemented",
+          "detail": "The validator requires three to five source-cited bullets for each accepted finding."
+        },
+        {
+          "requirement": "Multiple independent linked sources",
+          "status": "Partial",
+          "detail": "Independent-origin gates prevent counting issuer copies as independent evidence. Issuer and regulator origins can qualify; independent news, industry and competitor corroboration is not reliably validated."
+        },
+        {
+          "requirement": "Source-grounded timeline",
+          "status": "Implemented",
+          "detail": "Timeline entries must match cited calendar dates or fiscal periods. Fiscal labels are not converted to invented exact dates."
+        },
+        {
+          "requirement": "Relevant numbers and calculations",
+          "status": "Implemented",
+          "detail": "Accepted discoveries must cite a validated calculation and its actual input facts. Unrelated entities' financial figures are excluded from target-company inputs."
+        },
+        {
+          "requirement": "Strongest counterargument",
+          "status": "Implemented",
+          "detail": "Skeptic review and the finding schema carry a cited counterargument and alternative-explanation tests. Their quality still depends on retrieved evidence."
+        },
+        {
+          "requirement": "Measurable future falsification condition",
+          "status": "Implemented",
+          "detail": "A structured metric, comparison, finite threshold, future window and expected public source are required. These are proposed tests, not observed facts."
+        },
+        {
+          "requirement": "Strong / Moderate / Weak with reasons",
+          "status": "Implemented",
+          "detail": "A deterministic rating considers origin corroboration, contradictions and alternatives. Reasoning is shown; the badge is not a probability of truth."
+        }
+      ]
+    },
+    {
+      "name": "Track D And Finals Readiness",
+      "items": [
+        {
+          "requirement": "Business-model shift and its timing",
+          "status": "Partial",
+          "detail": "The planner and hypothesis schema support this angle, but specialty/CDMO/domestic-mix extraction and corroborated change-point discovery have not been demonstrated end to end."
+        },
+        {
+          "requirement": "Regulation affected financials before mainstream coverage",
+          "status": "Partial",
+          "detail": "Regulatory facts, financial calculations and causal chronology are supported. The agent does not systematically establish a first-mainstream-coverage timestamp, so the before-coverage claim is unproven."
+        },
+        {
+          "requirement": "Five-year geographic shift and drivers",
+          "status": "Partial",
+          "detail": "Geographic extraction and offline share-change analysis exist. Complete five-year live coverage and independently tested drivers remain inconsistent."
+        },
+        {
+          "requirement": "Work across any NIFTY 50 company in the track",
+          "status": "Unproven",
+          "detail": "A dated official 50-company snapshot checks index membership and Healthcare classification. Live/historical membership and broad unseen-company research success remain unproven."
+        },
+        {
+          "requirement": "Novelty, robustness and generality",
+          "status": "Unproven",
+          "detail": "Passing regression tests demonstrates software behavior, not discovery novelty or financial truth. A live evaluation across several unseen companies with reviewed evidence is still needed."
+        },
+        {
+          "requirement": "Public information and no investment recommendation",
+          "status": "Implemented",
+          "detail": "The supplied collectors use public HTTP(S) documents and search leads. Paid databases are not required. The discovery schema does not request investment recommendations."
+        },
+        {
+          "requirement": "Team originality",
+          "status": "Unproven",
+          "detail": "Originality and compliance with team rules require a human submission review; the application cannot certify them."
+        }
+      ]
+    }
+  ]
+}

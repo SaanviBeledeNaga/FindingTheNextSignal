@@ -38,7 +38,7 @@ class FakeWeb:
 
 def fact(quote, **kwargs):
     return {"kind": "business", "statement": quote, "page": 1, "quote": quote, "event_date": "", "fiscal_period": "",
-            "metric": "", "value": "", "currency": "", "unit": "", "basis": "", "definition": "", "entity": "Example Pharma", "context_evidence": [], **kwargs}
+            "metric": "", "value": "", "currency": "", "unit": "", "basis": "", "definition": "", "entity": "Example Pharma", "context_evidence": [], "column_header":{"page":0,"quote":""}, **kwargs}
 
 
 class FakeModel:
@@ -170,7 +170,7 @@ def test_same_issuer_never_counts_as_independent(store):
     model = FakeModel()
     draft = model.generate("", schemas.FINDINGS, {"facts": run["facts"]})["findings"][0]
     draft["conclusion"] = "supported"
-    finding = validate_finding(draft, review, state["hypotheses"][0], {f["id"]: f for f in run["facts"]}, sources, state["calculations"], state["profile"])
+    finding = validate_finding(draft, review, state["hypotheses"][0], {f["id"]: f for f in run["facts"]}, sources, state["calculations"], state["profile"], state['as_of'])
     assert finding["status"] == "unresolved"
     assert finding["strength"] == "Weak"
 
@@ -228,7 +228,8 @@ def test_html_does_not_execute_source_instructions(store, tmp_path):
     path = export(store, run, tmp_path / "safe.html")
     html = path.read_text(encoding="utf-8")
     assert "<script>" not in html
-    assert "&lt;script&gt;" in html
+    assert 'Earlier Claims Withheld' in html
+    assert 'quote not found' in html
 
 
 def test_collected_sources_remain_visible_without_validated_facts(store):

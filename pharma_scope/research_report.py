@@ -17,6 +17,8 @@ def references(ids):
 
 
 def html(run, challenges=()):
+    from .research_policy import publication_view
+    run = publication_view(run)
     facts = {f["id"]: f for f in run["facts"]}
     sources = {s["id"]: s for s in run["sources"]}
     body = f'<header><p class="eyebrow">PHARMA-SCOPE · Track D</p><h1>{e(run.get("profile", {}).get("name", run["company"]))}</h1>'
@@ -24,7 +26,20 @@ def html(run, challenges=()):
         body += '<aside><strong>SYNTHETIC DEMO — NOT REAL COMPANY DATA</strong></aside>'
     body += f'<p>Financial research investigation · {e(run["created"][:10])}</p><p class="badge">{e(run["status"].replace("_", " "))}</p></header>'
     if run["status"] != "completed":
-        body += '<aside>No fully supported discovery was established. The hypotheses below retain their unresolved or rejected status.</aside>'
+        body += '<aside><strong>Research Incomplete — Evidence Record</strong><p>No fully supported discovery was established. '
+        body += 'This record preserves research progress; it is not a completed discovery report. Unresolved claims remain unresolved.</p></aside>'
+    from .quality import readiness, scope_issues
+    for issue in scope_issues(run):
+        body += '<aside><strong>Reporting Scope Needs Review</strong><p>' + e(issue) + '</p></aside>'
+    body += '<section><h2>Completion Checks</h2><ul>'
+    for check in readiness(run):
+        body += '<li><strong>' + e(check['name']) + ': ' + ('Passed' if check['passed'] else 'Not Met') + '</strong> — ' + e(check['detail']) + '</li>'
+    body += '</ul><p>These checks describe evidence coverage, not a guarantee of accuracy.</p></section>'
+    if run.get('withheld_findings'):
+        body += '<section><h2>Earlier Claims Withheld</h2><p>These claims failed current evidence checks and are excluded from discoveries.</p>'
+        for item in run['withheld_findings']:
+            body += '<h3>' + e(item['claim']) + '</h3><ul>' + ''.join('<li>'+e(reason)+'</li>' for reason in item['reasons']) + '</ul>'
+        body += '</section>'
     body += '<section><h2>Research scope</h2><p>Public-source investigation of geographic exposure, business model changes and regulatory developments. '
     body += 'Quotes and financial calculations are mechanically checked. Interpretation, source classification and causal relevance require judgment.</p>'
     usage = run.get("usage", {})
@@ -34,6 +49,11 @@ def html(run, challenges=()):
         body += '<section><h2>Why no discovery was published</h2>'
         body += f'<p>{numeric} validated financial number(s) were available. A report needs comparable financial inputs, a relevant calculation and a claim that survives review.</p>'
         body += '<p>Company identification, report directories and earnings schedules alone do not establish a financial finding.</p>'
+        failures = [w for w in run.get('warnings', []) if any(s in w.lower() for s in
+                    ('rejected calculation', 'withheld hypothesis', 'rejected skeptic', 'withheld finding', 'remain unextracted', 'stopped at'))]
+        if failures:
+            body += '<h3>Recorded validation and collection issues</h3><p>This history includes earlier attempts; completion checks above describe the current result.</p><ul>'
+            body += ''.join('<li>' + e(w) + '</li>' for w in list(dict.fromkeys(failures))[-8:]) + '</ul>'
         body += '<h3>What to do next</h3><ol><li>Collect actual annual statements and quarterly results, including table headers and units.</li>'
         body += '<li>Check comparable periods, reporting definitions and entity scope.</li><li>Obtain independent evidence and test competing explanations before publishing.</li></ol></section>'
     for index, f in enumerate(run["findings"], 1):
@@ -133,6 +153,8 @@ def html(run, challenges=()):
 
 
 def markdown(run, challenges=()):
+    from .research_policy import publication_view
+    run = publication_view(run)
     lines = [f'# PHARMA-SCOPE / {run["company"]}', '', f'Status: {run["status"]}', '']
     for f in run["findings"]:
         lines += [f'## {f["title"]}', '', f'{f["strength"]} evidence — {f["status"]}', '', f["claim"], '', '### Why it matters', '']

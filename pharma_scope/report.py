@@ -50,6 +50,8 @@ def markdown(run, challenges=()):
 
 
 def export(store, run, destination: Path, format="html"):
+    from .research_policy import publication_view
+    run = publication_view(run)
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     challenges = store.challenges(run["id"])
